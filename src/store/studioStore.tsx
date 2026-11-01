@@ -50,6 +50,16 @@ const SAFE_MODE_KEY = 'pose_atlas_safe_mode_v1'
 
 const COMFY_CONFIG_VERSION = 2
 
+// 安全模式默认值：本机运行（pnpm dev / localhost）默认关闭，部署到公网的站点默认开启。
+// 可用环境变量 VITE_SAFE_MODE=on / off 强制指定。页面顶部按钮切换后以用户的选择为准。
+const DEFAULT_SAFE_MODE = (() => {
+  const env = import.meta.env.VITE_SAFE_MODE as string | undefined
+  if (env === 'on') return true
+  if (env === 'off') return false
+  if (import.meta.env.DEV) return false
+  return !(typeof window !== 'undefined' && ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname))
+})()
+
 const DEFAULT_API_CONFIG: ApiConfig = {
   activeProvider: 'gemini',
   imagePassMode: 'url',
@@ -329,9 +339,9 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   const [safeMode, setSafeMode] = useState<boolean>(() => {
     try {
       const raw = localStorage.getItem(SAFE_MODE_KEY)
-      return raw === null ? true : raw !== 'false'
+      return raw === null ? DEFAULT_SAFE_MODE : raw !== 'false'
     } catch {
-      return true
+      return DEFAULT_SAFE_MODE
     }
   })
   const [ageGateOpen, setAgeGateOpen] = useState(false)

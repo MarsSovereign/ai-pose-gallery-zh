@@ -13,6 +13,7 @@ AI 角色三合一参考图集 · MCP 服务（stdio，零依赖，仅需 Python
 环境变量：
   COMFYUI_URL   ComfyUI 地址，默认 http://127.0.0.1:8188（Desktop 版一般是 8000）
   POSE_GALLERY_OUTPUT  生成图保存目录，默认 <仓库>/output
+  POSE_GALLERY_NSFW    设为 1 时检索 / 随机默认包含 18+ 分类（仍可在调用时用 include_nsfw 覆盖）
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ WORKFLOW = ROOT / "src" / "workflows" / "qwen_image_edit_2509_3img.api.json"
 PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"]
 SERVER_INFO = {"name": "ai-pose-gallery", "version": "1.0.0"}
 
+DEFAULT_NSFW = os.environ.get("POSE_GALLERY_NSFW", "").lower() in ("1", "true", "yes", "on")
 NSFW_POSE = {"全身单人・性感系", "双人缠绵"}
 NSFW_COSTUME = {"内衣・睡衣", "性感穿搭"}
 LIB_FILES = {"pose": "pose-zh.json", "costume": "costume-zh.json", "portrait": "portrait-zh.json"}
@@ -86,7 +88,7 @@ def tool_search(args: dict) -> dict:
     category = args.get("category") or ""
     angle = args.get("angle") or ""
     hair = args.get("hair_length") or ""
-    include_nsfw = bool(args.get("include_nsfw", False))
+    include_nsfw = bool(args.get("include_nsfw", DEFAULT_NSFW))
     limit = max(1, min(int(args.get("limit", 20)), 100))
     out = []
     for it in load(lib):
@@ -121,7 +123,7 @@ def tool_categories(args: dict) -> dict:
         result["sections"] = sorted({i["分区"] for i in items})
         result["hair_lengths"] = sorted({i["发长"] for i in items})
         result["hairstyles"] = sorted({i["发型名称"] for i in items})
-    result["nsfw_note"] = "带 18+ 标记的分类默认不返回，需显式 include_nsfw=true"
+    result["nsfw_note"] = "当前默认包含 18+ 分类" if DEFAULT_NSFW else "带 18+ 标记的分类默认不返回，需显式 include_nsfw=true"
     return result
 
 
@@ -199,7 +201,7 @@ def tool_prompt(args: dict) -> dict:
 
 
 def tool_random(args: dict) -> dict:
-    nsfw = bool(args.get("include_nsfw", False))
+    nsfw = bool(args.get("include_nsfw", DEFAULT_NSFW))
     pick = lambda lib: random.choice([i for i in load(lib) if nsfw or not is_nsfw(lib, i)])  # noqa: E731
     return {lib: summarize(lib, pick(lib)) for lib in ("portrait", "costume", "pose")}
 
@@ -306,7 +308,7 @@ TOOLS = [
                 "hair_length": {"type": "string", "description": "仅人像库：短发 / 中发 / 中长发 / 长发"},
                 "limit": {"type": "integer", "default": 20},
                 "shuffle": {"type": "boolean", "default": False},
-                "include_nsfw": {"type": "boolean", "default": False, "description": "是否包含 18+ 分类（仅限成年用户合法创作）"},
+                "include_nsfw": {"type": "boolean", "default": DEFAULT_NSFW, "description": "是否包含 18+ 分类（仅限成年用户合法创作）"},
             },
             "required": ["library"],
         },
@@ -329,7 +331,7 @@ TOOLS = [
     {
         "name": "random_recipe",
         "description": "随机抽取一套人像 + 服装 + 姿势配方。",
-        "inputSchema": {"type": "object", "properties": {"include_nsfw": {"type": "boolean", "default": False}}},
+        "inputSchema": {"type": "object", "properties": {"include_nsfw": {"type": "boolean", "default": DEFAULT_NSFW}}},
     },
     {
         "name": "comfyui_generate",

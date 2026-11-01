@@ -90,3 +90,11 @@ claude mcp add pose-gallery -e COMFYUI_URL=http://127.0.0.1:8000 -- python /绝�
 | `build_recipe_prompt` | 组装中 / 英文多图合成提示词，返回按图1/2/3 排好的参考图路径 |
 | `random_recipe` | 随机一套配方 |
 | `comfyui_generate` | 用 Qwen Image Edit 2509 三图工作流在本机 ComfyUI 出图，保存到 `output/`（可用 `POSE_GALLERY_OUTPUT` 改） |
+
+## 安全模式（18+ 分类）默认值
+
+- **本机运行**（`pnpm dev` 或在 localhost 打开）：安全模式默认**关闭**，18+ 分类直接显示，批量 / 随机 / AI 搜索也会包含。
+- **部署到公网的站点**：默认开启，需要年龄确认后才显示。
+- 强制指定：构建或启动时设置 `VITE_SAFE_MODE=on` 或 `off`。页面顶部按钮手动切换过之后，以你的选择为准（保存在浏览器里）。
+- **MCP 服务**：注册时加 `-e POSE_GALLERY_NSFW=1`，检索和随机默认包含 18+。
+- **ComfyUI「姿势批量遍历」节点**：把「包含18+」打开后保存工作流即可。
