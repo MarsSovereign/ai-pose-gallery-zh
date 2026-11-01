@@ -5,17 +5,24 @@
 export type ClipLibrary = 'pose' | 'costume' | 'portrait'
 
 export const HF_HOST_KEY = 'pose_atlas_hf_host_v1'
+// 前两项经本站服务端同源转发（本地 pnpm dev 与 Cloudflare 部署都支持），不受浏览器跨域限制
 export const HF_HOSTS = [
-  { value: 'https://hf-mirror.com/', label: 'hf-mirror.com（国内镜像，推荐）' },
-  { value: 'https://huggingface.co/', label: 'huggingface.co（官方）' },
+  { value: 'proxy:mirror', label: '本站转发 → hf-mirror.com（国内推荐）' },
+  { value: 'proxy:hf', label: '本站转发 → huggingface.co' },
+  { value: 'https://huggingface.co/', label: '浏览器直连 huggingface.co（静态托管时使用）' },
 ]
 
 export function getHfHost(): string {
   try {
-    return localStorage.getItem(HF_HOST_KEY) || HF_HOSTS[0].value
+    const v = localStorage.getItem(HF_HOST_KEY)
+    return v && HF_HOSTS.some((h) => h.value === v) ? v : HF_HOSTS[0].value
   } catch {
     return HF_HOSTS[0].value
   }
+}
+
+function resolveRemoteHost(v: string): string {
+  return v.startsWith('proxy:') ? `${window.location.origin}/hf/${v.slice(6)}/` : v
 }
 
 export function setHfHost(host: string) {
@@ -69,7 +76,7 @@ function loadEngine(onProgress?: (p: ClipProgress) => void) {
     onProgress?.({ message: '正在加载 AI 搜索引擎…' })
     const tf = await import('@huggingface/transformers')
     tf.env.allowLocalModels = false
-    tf.env.remoteHost = getHfHost()
+    tf.env.remoteHost = resolveRemoteHost(getHfHost())
     const files = new Map<string, { loaded: number; total: number }>()
     const progress_callback = (p: any) => {
       if (p?.status === 'progress' && p.file) {

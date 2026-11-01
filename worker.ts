@@ -1,4 +1,5 @@
 import { onRequestPost } from './functions/api/proxy'
+import { proxyHfModel } from './functions/hf/[[path]]'
 
 export interface Env {
   ASSETS: {
@@ -19,6 +20,11 @@ export default {
         status: 405,
         headers: { 'Content-Type': 'application/json; charset=utf-8' },
       })
+    }
+
+    // AI 语义搜索模型文件同源转发
+    if (url.pathname.startsWith('/hf/') && request.method === 'GET') {
+      return proxyHfModel(request)
     }
 
     // Fallback to static assets binding

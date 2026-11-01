@@ -43,6 +43,18 @@
 
 ---
 
+## v2.1 新增
+
+- **多视角设定图 / 同角色批量换姿势**：锁定人像 + 服装，一键生成同一姿势的 5 个视角并拼成设定图，或随机批量换姿势（可做 LoRA 训练集）。
+- **人物卡 ZIP**：参考图 + 生成结果 + 中英文「角色 DNA」+ 提示词打包导出，可再导入还原。
+- **图生视频**：导入自己的 ComfyUI 视频工作流（H3 / Wan 等），用生成结果做首帧直接出视频。
+- **DWPose 骨架控制预设**（实验性，需 comfyui_controlnet_aux）：动作还原更准。
+- **英文提示词 / 自定义画风**、**我的素材库**（人像 / 服装 / 姿势 / 场景 / 表情 / 道具）与新增的场景 / 表情 / 道具槽位。
+- **AI 语义搜索 / 以图搜图 / 找相似**（浏览器本地 Chinese-CLIP），**收藏夹**与**配方分享链接**。
+- ComfyUI 插件新增 **姿势批量遍历** 与 **LoRA 训练集保存** 节点；新增零依赖 **MCP 服务**。
+
+详见 [docs/features-v2.1.md](docs/features-v2.1.md)。
+
 ## 核心功能
 
 ### 1. 三大参考图库（姿势 / 服装 / 人像）
@@ -151,8 +163,10 @@ git clone --depth 1 https://github.com/anhao/ai-pose-gallery-zh.git
 │   ├── i18n.py             # 日译中词典与人像发型/服装标签映射
 │   ├── apply_translation.py# 生成三库 *-zh.json 纯中文数据与检索索引
 │   ├── verify.py           # 校验本地图片完整性（存在性 / 大小 / 文件头）
+│   ├── build_clip_index.mjs# 预计算三库 Chinese-CLIP 图像向量（AI 语义搜索）
 │   └── build.sh            # 构建 Cloudflare 发布目录 dist/
 ├── skills/                 # Claude Code / Agent 姿势・服装・人像检索技能包
+├── mcp_server/server.py    # 零依赖 MCP 服务：检索图库 / 组装提示词 / 调用本机 ComfyUI 出图
 └── README.md
 ```
 
@@ -191,7 +205,7 @@ python3 scripts/verify.py
 
 ## 部署到 Cloudflare（Workers / Pages）
 
-本项目自带 [wrangler.jsonc](wrangler.jsonc) 与 [worker.ts](worker.ts)，同时支持 **Cloudflare Workers（含静态 Assets + `/api/proxy` 同源代理）** 与 **Cloudflare Pages** 部署。仓库总体积约 `1.1 GB`、总文件数约 `8,735` 个、单文件全部 `< 2 MB`，完全符合 Cloudflare 免费版限制（单文件 ≤ 25 MiB，文件数 ≤ 20,000）。
+本项目自带 [wrangler.jsonc](wrangler.jsonc) 与 [worker.ts](worker.ts)，同时支持 **Cloudflare Workers（含静态 Assets + `/api/proxy` 同源代理）** 与 **Cloudflare Pages** 部署。仓库总体积约 `1.1 GB`、总文件数约 `8,735` 个、图片单文件全部 `< 2 MB`（构建产物中最大的是 AI 搜索用的 onnxruntime wasm，约 21 MB），完全符合 Cloudflare 免费版限制（单文件 ≤ 25 MiB，文件数 ≤ 20,000）。
 
 ### 方式一：Cloudflare Workers 自动/命令行部署（推荐，内置 `/api/proxy` 解决千问/豆包跨域）
 

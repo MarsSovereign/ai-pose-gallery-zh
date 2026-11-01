@@ -69,7 +69,7 @@ export function BatchPanel() {
   const [exporting, setExporting] = useState(false)
   const importRef = useRef<HTMLInputElement | null>(null)
 
-  const characterName = cardName.trim() || recipe.portrait?.发型名称 || '我的角色'
+  const characterName = cardName.trim() || '我的角色'
 
   const poseGroup = useMemo(() => {
     if (!poses || !recipe.pose || recipe.pose.source === 'upload') return null

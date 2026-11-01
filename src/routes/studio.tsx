@@ -117,9 +117,11 @@ function StudioPage() {
   const navigate = useNavigate()
   const [libraryPicker, setLibraryPicker] = useState<'portrait' | 'costume' | 'pose' | null>(null)
 
-  // 打开分享链接：按图库 ID 还原配方
+  // 打开分享链接：按图库 ID 还原配方（ref 防止开发模式下 effect 重复执行）
+  const loadedShareRef = useRef('')
   useEffect(() => {
-    if (!search.r) return
+    if (!search.r || loadedShareRef.current === search.r) return
+    loadedShareRef.current = search.r
     const shared = decodeRecipe(search.r)
     void navigate({ to: '/studio', search: {}, replace: true })
     if (!shared) {

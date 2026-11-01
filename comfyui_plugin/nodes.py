@@ -363,11 +363,184 @@ class CharacterRecipeNode:
         )
 
 
+POSE_SYSTEMS = ["全部", "全身单人・标准系", "上半身单人", "全身单人・性感系", "双人缠绵"]
+POSE_ANGLES = ["全部", "正面", "俯视", "仰视", "侧面", "斜侧"]
+NSFW_POSE_SYSTEMS = {"全身单人・性感系", "双人缠绵"}
+
+
+def _pose_categories() -> list[str]:
+    try:
+        from .routes import load_library
+
+        cats = sorted({it.get("分类", "") for it in load_library("pose") if it.get("分类")})
+    except Exception:  # noqa: BLE001 - 数据缺失时仍允许节点注册
+        cats = []
+    return ["全部"] + cats
+
+
+def select_pose_batch(
+    system: str = "全部",
+    category: str = "全部",
+    angle: str = "全部",
+    start_index: int = 0,
+    count: int = 8,
+    shuffle: bool = False,
+    seed: int = 0,
+    include_nsfw: bool = False,
+) -> list[dict]:
+    """按条件筛选姿势条目（纯数据逻辑，便于单独测试）。"""
+    import random
+
+    from .routes import load_library
+
+    items = load_library("pose")
+    out = [
+        it
+        for it in items
+        if (include_nsfw or it.get("体系") not in NSFW_POSE_SYSTEMS)
+        and (system == "全部" or it.get("体系") == system)
+        and (category == "全部" or it.get("分类") == category)
+        and (angle == "全部" or it.get("角度") == angle)
+    ]
+    if shuffle:
+        random.Random(seed).shuffle(out)
+    start = max(0, int(start_index))
+    return out[start : start + max(1, int(count))]
+
+
+class PoseBatchNode:
+    """按体系 / 分类 / 视角批量遍历姿势库，输出图片列表。
+
+    下游节点会对列表中的每一张姿势图各执行一次：固定人像和服装、只换姿势，
+    一次排队就能批量生成同一角色的多张图（适合做角色 LoRA 训练集或多镜头素材）。
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "体系": (POSE_SYSTEMS, {"default": "全身单人・标准系"}),
+                "分类": (_pose_categories(), {"default": "全部"}),
+                "视角": (POSE_ANGLES, {"default": "正面"}),
+                "起始序号": ("INT", {"default": 0, "min": 0, "max": 2000}),
+                "数量": ("INT", {"default": 8, "min": 1, "max": 200}),
+                "随机打乱": ("BOOLEAN", {"default": False}),
+                "随机种子": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFF}),
+                "包含18+": ("BOOLEAN", {"default": False}),
+                "resize_mode": (RESIZE_MODES, {"default": "原图尺寸"}),
+                "width": ("INT", {"default": 1024, "min": 64, "max": 4096, "step": 8}),
+                "height": ("INT", {"default": 1280, "min": 64, "max": 4096, "step": 8}),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING", "STRING", "INT")
+    RETURN_NAMES = ("姿势图列表", "图片ID列表", "中文姿势提示词列表", "英文姿势提示词列表", "数量")
+    OUTPUT_IS_LIST = (True, True, True, True, False)
+    FUNCTION = "load_batch"
+    CATEGORY = "AI角色三合一参考图集"
+
+    def load_batch(self, **kw):
+        picked = select_pose_batch(
+            system=kw.get("体系", "全部"),
+            category=kw.get("分类", "全部"),
+            angle=kw.get("视角", "全部"),
+            start_index=kw.get("起始序号", 0),
+            count=kw.get("数量", 8),
+            shuffle=kw.get("随机打乱", False),
+            seed=kw.get("随机种子", 0),
+            include_nsfw=kw.get("包含18+", False),
+        )
+        if not picked:
+            raise ValueError("没有符合条件的姿势，请放宽体系 / 分类 / 视角筛选")
+        images, ids, zh_list, en_list = [], [], [], []
+        for item in picked:
+            pil = _load_pil_image(
+                item["原图"],
+                resize_mode=kw.get("resize_mode", "原图尺寸"),
+                width=kw.get("width", 1024),
+                height=kw.get("height", 1280),
+            )
+            zh, en = _build_pose_prompts(item)
+            images.append(_pil_to_comfy_tensor(pil))
+            ids.append(item["id"])
+            zh_list.append(zh)
+            en_list.append(en)
+        return (images, ids, zh_list, en_list, len(picked))
+
+
+def save_lora_dataset(images, captions: list[str], trigger: str, out_dir) -> int:
+    """把图片与打标文本成对保存为 0001.png + 0001.txt（纯逻辑，便于测试）。"""
+    from pathlib import Path
+
+    from PIL import Image
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    existing = sorted(out.glob("*.png"))
+    idx = len(existing)
+    saved = 0
+    for i, img in enumerate(images):
+        batch = img if getattr(img, "ndim", 3) == 4 else [img]
+        caption = captions[i] if i < len(captions) else (captions[-1] if captions else "")
+        for frame in batch:
+            import numpy as np
+
+            arr = np.clip(np.asarray(frame.cpu() if hasattr(frame, "cpu") else frame) * 255.0, 0, 255).astype(np.uint8)
+            idx += 1
+            Image.fromarray(arr).save(out / f"{idx:04d}.png")
+            text = ", ".join(x for x in [trigger.strip(), caption.strip()] if x)
+            (out / f"{idx:04d}.txt").write_text(text, encoding="utf-8")
+            saved += 1
+    return saved
+
+
+class LoraDatasetSaverNode:
+    """把批量生成的角色图和对应提示词保存成 LoRA 训练集（图片 + 同名 .txt 打标文件）。"""
+
+    INPUT_IS_LIST = True
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "图片": ("IMAGE",),
+                "打标文本": ("STRING", {"forceInput": True}),
+                "触发词": ("STRING", {"default": "mychar", "multiline": False}),
+                "数据集文件夹": ("STRING", {"default": "lora_dataset/mychar", "multiline": False}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("保存目录",)
+    OUTPUT_NODE = True
+    FUNCTION = "save"
+    CATEGORY = "AI角色三合一参考图集"
+
+    def save(self, **kw):
+        from pathlib import Path
+
+        try:
+            import folder_paths
+
+            base = Path(folder_paths.get_output_directory())
+        except ImportError:
+            base = Path.cwd() / "output"
+        folder = (kw.get("数据集文件夹") or ["lora_dataset"])[0].strip().strip("/\\") or "lora_dataset"
+        target = (base / folder).resolve()
+        if not target.is_relative_to(base.resolve()):
+            raise ValueError("数据集文件夹必须位于 ComfyUI output 目录内")
+        trigger = (kw.get("触发词") or [""])[0]
+        n = save_lora_dataset(kw.get("图片") or [], list(kw.get("打标文本") or []), trigger, target)
+        return {"ui": {"text": [f"已保存 {n} 张到 {target}"]}, "result": (str(target),)}
+
+
 NODE_CLASS_MAPPINGS = {
     "PoseGalleryNode": PoseGalleryNode,
     "CostumeGalleryNode": CostumeGalleryNode,
     "PortraitGalleryNode": PortraitGalleryNode,
     "CharacterRecipeNode": CharacterRecipeNode,
+    "PoseBatchNode": PoseBatchNode,
+    "LoraDatasetSaverNode": LoraDatasetSaverNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -375,4 +548,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "CostumeGalleryNode": "AI 服装参考图 (Costume Gallery)",
     "PortraitGalleryNode": "AI 人像参考图 (Portrait Gallery)",
     "CharacterRecipeNode": "AI 角色三合一合成配方 (3-in-1 Recipe)",
+    "PoseBatchNode": "AI 姿势批量遍历 (Pose Batch)",
+    "LoraDatasetSaverNode": "保存 LoRA 训练集 (图片+打标)",
 }
