@@ -9,12 +9,17 @@ import {
   ExternalLinkIcon,
   PlusIcon,
   RotateCcwIcon,
+  ScanSearchIcon,
   SearchIcon,
+  StarIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { ANGLES, isNsfwPose, isNsfwPoseSystem, posesQuery } from '@/api/gallery'
 import { EmptyState } from '@/components/common/EmptyState'
+import { type AiResult, FavoriteButton, SmartSearchBar } from '@/components/gallery/SmartSearchBar'
+import { searchSimilarTo } from '@/lib/clipSearch'
+import { toggleFavorite, useFavorites } from '@/lib/favorites'
 import { PageHeader } from '@/components/common/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -45,6 +50,9 @@ function PosesPage() {
   const [shown, setShown] = useState(60)
   const [hoverAngles, setHoverAngles] = useState<Record<string, string>>({})
   const [viewer, setViewer] = useState<{ groupIndex: number; item: PoseItem } | null>(null)
+  const [aiResult, setAiResult] = useState<AiResult | null>(null)
+  const [onlyFav, setOnlyFav] = useState(false)
+  const favs = useFavorites('pose')
 
   const activeLine = safeMode && line && isNsfwPoseSystem(line) ? '' : line
 
@@ -69,34 +77,59 @@ function PosesPage() {
 
   const q = query.trim().toLowerCase()
 
+  const aiRank = useMemo(() => (aiResult ? new Map(aiResult.ids.map((id, i) => [id, i])) : null), [aiResult])
+
   const filteredGroups = useMemo(() => {
-    return baseGroups.filter((g) => {
+    const list = baseGroups.filter((g) => {
       if (activeLine && g.system !== activeLine) return false
       if (category !== 'all' && g.category !== category) return false
       return g.items.some((it) => {
         if (angle && it.角度 !== angle) return false
         if (q && !`${it.姿势名称} ${it.id} ${it.分类} ${it.姿势编号} ${it.体系}`.toLowerCase().includes(q)) return false
+        if (onlyFav && !favs.has(it.id)) return false
+        if (aiRank && !aiRank.has(it.id)) return false
         return true
       })
     })
-  }, [baseGroups, activeLine, category, angle, q])
+    if (!aiRank) return list
+    const best = (g: PoseGroup) => Math.min(...g.items.map((it) => aiRank.get(it.id) ?? Infinity))
+    return list.sort((a, b) => best(a) - best(b))
+  }, [baseGroups, activeLine, category, angle, q, onlyFav, favs, aiRank])
 
   const filteredSingles = useMemo(() => {
-    return baseItems.filter((it) => {
+    const list = baseItems.filter((it) => {
       if (activeLine && it.体系 !== activeLine) return false
       if (category !== 'all' && it.分类 !== category) return false
       if (angle && it.角度 !== angle) return false
       if (q && !`${it.姿势名称} ${it.id} ${it.分类} ${it.姿势编号} ${it.体系}`.toLowerCase().includes(q)) return false
+      if (onlyFav && !favs.has(it.id)) return false
+      if (aiRank && !aiRank.has(it.id)) return false
       return true
     })
-  }, [baseItems, activeLine, category, angle, q])
+    return aiRank ? list.sort((a, b) => aiRank.get(a.id)! - aiRank.get(b.id)!) : list
+  }, [baseItems, activeLine, category, angle, q, onlyFav, favs, aiRank])
 
   const resetFilters = () => {
     setLine('')
     setCategory('all')
     setAngle('')
     setQuery('')
+    setAiResult(null)
+    setOnlyFav(false)
     setShown(60)
+  }
+
+  const findSimilar = async (item: PoseItem) => {
+    try {
+      const res = await searchSimilarTo(item.id, 'pose')
+      setAiResult({ label: `相似：${item.姿势名称}（${item.角度}）`, ids: res.map((x) => x.id) })
+      setViewMode('single')
+      setShown(96)
+      setViewer(null)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '找相似失败')
+    }
   }
 
   // Keyboard navigation in dialog
@@ -276,6 +309,23 @@ function PosesPage() {
           <RotateCcwIcon className="size-3.5" />
           重置
         </Button>
+        <div className="md:col-span-4">
+          <SmartSearchBar
+            lib="pose"
+            aiResult={aiResult}
+            onAiResult={(r) => {
+              setAiResult(r)
+              if (r) setViewMode('single')
+              setShown(96)
+            }}
+            onlyFavorites={onlyFav}
+            onOnlyFavoritesChange={(v) => {
+              setOnlyFav(v)
+              setShown(60)
+            }}
+            favoriteCount={favs.size}
+          />
+        </div>
       </div>
 
       {/* 列表区 */}
@@ -323,6 +373,11 @@ function PosesPage() {
                     {picked ? <CheckIcon className="size-3" /> : <PlusIcon className="size-3" />}
                     {picked ? '已选' : '加入配方'}
                   </button>
+                  <FavoriteButton
+                    active={favs.has(item.id)}
+                    onToggle={() => toggleFavorite('pose', item.id)}
+                    className="absolute right-2 bottom-2"
+                  />
                 </div>
 
                 <div className="px-1.5 pt-2.5 pb-1.5">
@@ -407,6 +462,11 @@ function PosesPage() {
                     {picked ? <CheckIcon className="size-3" /> : <PlusIcon className="size-3" />}
                     {picked ? '已选' : '加入配方'}
                   </button>
+                  <FavoriteButton
+                    active={favs.has(item.id)}
+                    onToggle={() => toggleFavorite('pose', item.id)}
+                    className="absolute right-2 bottom-2"
+                  />
                 </div>
                 <div className="px-1.5 pt-2 pb-1">
                   <div className="line-clamp-2 text-xs font-semibold">{item.姿势名称}</div>
@@ -533,6 +593,14 @@ function PosesPage() {
                       {picked ? '已在角色配方中（点击移除）' : '加入角色配方'}
                     </Button>
                     <div className="grid grid-cols-2 gap-2">
+                      <Button variant="outline" size="sm" onClick={() => toggleFavorite('pose', it.id)}>
+                        <StarIcon className={cn('size-3.5', favs.has(it.id) && 'fill-amber-400 text-amber-500')} />
+                        {favs.has(it.id) ? '已收藏' : '收藏'}
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => void findSimilar(it)}>
+                        <ScanSearchIcon className="size-3.5" />
+                        找相似
+                      </Button>
                       <Button variant="outline" size="sm" asChild>
                         <a href={`/${it.原图}`} download={`${it.id}.png`}>
                           <DownloadIcon className="size-3.5" />

@@ -1,4 +1,4 @@
-import type { ApiConfig, ImageProviderId, RecipeState } from '@/types/gallery'
+import type { ApiConfig, CustomStylePreset, ImageProviderId, PromptLang, RecipeState } from '@/types/gallery'
 import qwen2509ThreeImageWorkflow from '@/workflows/qwen_image_edit_2509_3img.api.json'
 
 export interface ProviderModelOption {
@@ -91,63 +91,162 @@ export const PROVIDER_META: Record<
   },
 }
 
-export const STYLE_PRESETS: Record<string, { label: string; prompt: string }> = {
+export const STYLE_PRESETS: Record<string, { label: string; prompt: string; en: string }> = {
   none: {
     label: '无预设（跟随参考图）',
     prompt: '',
+    en: '',
   },
   realistic: {
     label: '写实人像写真',
     prompt: '写实商业摄影级质感，85mm 人像镜头，自然柔和光影，真实肌肤纹理与织物细节，8k 高清画质。',
+    en: 'Photorealistic commercial portrait photography, 85mm lens, soft natural lighting, real skin texture and fabric detail, 8k.',
   },
   fashion: {
     label: '日韩杂志画报',
     prompt: '日韩时尚穿搭杂志画报风格，干净极简摄影棚背景，高级色调，突出人物颜值与服装剪裁。',
+    en: 'Japanese/Korean fashion magazine editorial, clean minimal studio background, refined color grading, highlighting the face and garment tailoring.',
   },
   film: {
     label: '复古胶片写真',
     prompt: '35mm 富士胶片摄影质感，轻微胶片颗粒，柔和复古暖调，自然街拍光影与电影呼吸感。',
+    en: '35mm Fujifilm look, subtle film grain, soft vintage warm tones, natural street-photo lighting with a cinematic feel.',
   },
   semi_real: {
     label: '2.5D 游戏原画立绘',
     prompt: '2.5D 半写实高精度游戏角色原画，唯美厚涂光影，精致五官与华丽布料金属质感。',
+    en: '2.5D semi-realistic high-detail game character key art, painterly lighting, delicate facial features, rich fabric and metal materials.',
   },
   anime: {
     label: '日系二次元插画',
     prompt: '日系精致二次元插画风格，细腻赛璐璐与厚涂光影过渡，动漫角色立绘质感，色彩通透干净。',
+    en: 'Polished Japanese anime illustration, cel shading blended with painterly lighting, character key-visual quality, clean vivid colors.',
   },
   cel_anime: {
     label: '新海诚感动画电影',
     prompt: '动画电影级画面质感，清澈高饱和光影，细腻体积光与发丝高光，干净唯美的动漫色彩。',
+    en: 'Anime feature-film quality, clear saturated lighting, volumetric light and hair highlights, clean beautiful anime colors.',
   },
   manga: {
     label: '日式黑白漫画网点',
     prompt: '日本黑白漫画原稿风格，利落精准的G笔线稿，细腻漫画网点纸阴影与层次对比。',
+    en: 'Japanese black-and-white manga manuscript style, crisp G-pen line art, screentone shading with strong contrast.',
   },
   render3d: {
     label: '3D 次世代角色渲染',
     prompt: 'Unreal Engine 5 / Octane Render 次世代 3D 角色渲染，细腻次表面散射肌肤材质，电影级布光。',
+    en: 'Next-gen 3D character render (Unreal Engine 5 / Octane), subsurface-scattering skin, cinematic lighting.',
   },
   chibi_box: {
     label: '3D 潮玩手办质感',
     prompt: '高品质 PVC 涂装完成品手办质感，柔和摄影棚柔光箱布光，精致材质高光与微距景深。',
+    en: 'High-quality painted PVC figure look, soft studio softbox lighting, detailed material highlights, macro depth of field.',
   },
   cyberpunk: {
     label: '赛博朋克霓虹',
     prompt: '赛博朋克科幻视觉风格，雨夜霓虹冷暖双色轮廓光，未来感材质反光与电影级氛围。',
+    en: 'Cyberpunk sci-fi aesthetic, rainy night neon with dual warm/cool rim light, futuristic reflective materials, cinematic mood.',
   },
   concept_sheet: {
     label: '角色设定集立绘（纯白底）',
     prompt: '标准角色设定集全身立绘，纯白干净无杂物背景，均匀漫反射布光，清晰展示全身服装结构与配饰细节。',
+    en: 'Standard character design sheet full-body illustration, pure white clean background, even diffuse lighting, clearly showing outfit construction and accessories.',
   },
+}
+
+export interface StyleOption {
+  key: string
+  label: string
+  prompt: string
+  en: string
+  custom?: boolean
+}
+
+/** 内置画风 + 用户自定义画风（自定义画风的 key 为 custom:<id>） */
+export function allStyleOptions(customStyles: CustomStylePreset[] = []): StyleOption[] {
+  return [
+    ...Object.entries(STYLE_PRESETS).map(([key, v]) => ({ key, ...v })),
+    ...customStyles.map((c) => ({ key: `custom:${c.id}`, label: `★ ${c.label}`, prompt: c.prompt, en: c.prompt, custom: true })),
+  ]
+}
+
+export function resolveStyle(key: string, customStyles: CustomStylePreset[] = []): StyleOption {
+  return allStyleOptions(customStyles).find((s) => s.key === key) ?? { key: 'realistic', ...STYLE_PRESETS.realistic }
+}
+
+export type ReferenceRole = 'portrait' | 'costume' | 'pose' | 'scene' | 'expression' | 'prop' | 'extra'
+
+export interface RecipeReference {
+  role: ReferenceRole
+  /** 拼图卡片标题，如「人像」 */
+  label: string
+  /** 拼图卡片副标题 */
+  sub: string
+  src: string
+}
+
+const SLOT_LABEL: Record<ReferenceRole, string> = {
+  portrait: '人像',
+  costume: '服装',
+  pose: '姿势',
+  scene: '场景',
+  expression: '表情',
+  prop: '道具',
+  extra: '附加',
+}
+
+/**
+ * 配方中所有参考图的统一顺序（提示词中的「图1 / 图2…」、拼图、发给云端接口的图片序列都按这个顺序）：
+ * 人像 → 服装 → 姿势 → 场景 → 表情 → 道具 → 附加参考图
+ */
+export function recipeReferences(recipe: RecipeState): RecipeReference[] {
+  const list: RecipeReference[] = []
+  if (recipe.portrait) {
+    list.push({ role: 'portrait', label: SLOT_LABEL.portrait, sub: recipe.portrait.标题, src: recipe.portrait.原图 || recipe.portrait.缩略图 })
+  }
+  if (recipe.costume) {
+    list.push({
+      role: 'costume',
+      label: SLOT_LABEL.costume,
+      sub: `${recipe.costume.分类} · ${recipe.costume.服装名称}`,
+      src: recipe.costume.预览图 || recipe.costume.原图 || recipe.costume.缩略图,
+    })
+  }
+  if (recipe.pose) {
+    list.push({
+      role: 'pose',
+      label: SLOT_LABEL.pose,
+      sub: recipe.pose.角度 ? `${recipe.pose.姿势名称}（${recipe.pose.角度}）` : recipe.pose.姿势名称,
+      src: recipe.pose.原图 || recipe.pose.缩略图,
+    })
+  }
+  for (const role of ['scene', 'expression', 'prop'] as const) {
+    const ref = recipe[role]
+    if (ref) list.push({ role, label: SLOT_LABEL[role], sub: ref.note ? `${ref.name} · ${ref.note}` : ref.name, src: ref.url })
+  }
+  for (const extra of recipe.extraImages || []) {
+    list.push({ role: 'extra', label: SLOT_LABEL.extra, sub: extra.name || '自定义参考图', src: extra.url })
+  }
+  return list
+}
+
+export interface PromptOptions {
+  lang?: PromptLang
+  customStyles?: CustomStylePreset[]
+  /** 姿势图已被转换为 DWPose 骨架图（ComfyUI 骨架控制预设） */
+  poseSkeleton?: boolean
 }
 
 // 按实际传入模型的图片顺序动态生成「图1 / 图2 / 图3...」明确指代，支持附加上传图片
 // 用自然语言逐项描述（人物 / 服装 / 姿势），实测比堆砌要点更能让多图编辑模型还原服装、避免照搬人体模型线条
 const PHOTO_STYLES = new Set(['none', 'realistic', 'fashion', 'film'])
 
-export function buildRecipePrompt(recipe: RecipeState, stylePreset = 'realistic'): string {
-  const styleInfo = STYLE_PRESETS[stylePreset] ?? STYLE_PRESETS.realistic
+export function buildRecipePrompt(recipe: RecipeState, stylePreset = 'realistic', opts: PromptOptions = {}): string {
+  return opts.lang === 'en' ? buildRecipePromptEn(recipe, stylePreset, opts) : buildRecipePromptZh(recipe, stylePreset, opts)
+}
+
+function buildRecipePromptZh(recipe: RecipeState, stylePreset: string, opts: PromptOptions): string {
+  const styleInfo = resolveStyle(stylePreset, opts.customStyles)
   const isPhoto = PHOTO_STYLES.has(stylePreset)
   const clauses: string[] = []
   let idx = 1
@@ -179,11 +278,26 @@ export function buildRecipePrompt(recipe: RecipeState, stylePreset = 'realistic'
     const body = isPhoto
       ? `最终画面中的人物是真人，皮肤真实自然${wear}`
       : `人物的肤色与质感按风格要求呈现${wear}`
+    const poseName = recipe.pose.角度 ? `${recipe.pose.姿势名称}，${recipe.pose.角度}` : recipe.pose.姿势名称
     clauses.push(
-      recipe.pose.source === 'upload'
-        ? `• 姿势：按照图${idx}中的人物动作和镜头角度摆姿势；仅参考姿势与构图，不复制图${idx}人物的外观与服装，${body}。`
-        : `• 姿势：按照图${idx}中人体模型的动作和镜头角度摆姿势（${recipe.pose.姿势名称}，${recipe.pose.角度}）；图${idx}只是动作示意，${body}。`
+      opts.poseSkeleton
+        ? `• 姿势：图${idx}是人体骨架关键点图，让人物严格按照骨架的四肢、躯干和头部位置摆出同样的姿势（${poseName}）；骨架线条和圆点不要出现在画面中，${body}。`
+        : recipe.pose.source === 'upload'
+          ? `• 姿势：按照图${idx}中的人物动作和镜头角度摆姿势；仅参考姿势与构图，不复制图${idx}人物的外观与服装，${body}。`
+          : `• 姿势：按照图${idx}中人体模型的动作和镜头角度摆姿势（${poseName}）；图${idx}只是动作示意，${body}。`
     )
+    idx++
+  }
+  if (recipe.scene) {
+    clauses.push(`• 场景：把人物放在图${idx}所示的场景中（${recipe.scene.name}${recipe.scene.note ? `：${recipe.scene.note}` : ''}），环境、透视和光线与图${idx}一致，人物与场景的光影融合自然。`)
+    idx++
+  }
+  if (recipe.expression) {
+    clauses.push(`• 表情：人物的面部表情参考图${idx}（${recipe.expression.name}${recipe.expression.note ? `：${recipe.expression.note}` : ''}），只借用表情和神态，不改变人物本身的长相。`)
+    idx++
+  }
+  if (recipe.prop) {
+    clauses.push(`• 道具：让人物自然地手持或使用图${idx}中的道具（${recipe.prop.name}${recipe.prop.note ? `：${recipe.prop.note}` : ''}），道具的外形、颜色和材质以图${idx}为准。`)
     idx++
   }
   for (const extra of recipe.extraImages || []) {
@@ -205,6 +319,61 @@ export function buildRecipePrompt(recipe: RecipeState, stylePreset = 'realistic'
     lines.push(`• 风格：${styleInfo.prompt} 人物比例协调，手部与五官自然，光影统一。`)
   }
   lines.push('画面中没有任何文字、标志或水印。')
+  return lines.join('\n')
+}
+
+function buildRecipePromptEn(recipe: RecipeState, stylePreset: string, opts: PromptOptions): string {
+  const styleInfo = resolveStyle(stylePreset, opts.customStyles)
+  const isPhoto = PHOTO_STYLES.has(stylePreset)
+  const clauses: string[] = []
+  let idx = 1
+  let costumeIdx = 0
+
+  if (recipe.portrait) {
+    clauses.push(`• Person: the person in image ${idx}. Keep the same face shape, facial features, hairstyle and hair color.`)
+    idx++
+  }
+  if (recipe.costume) {
+    costumeIdx = idx
+    const kw = recipe.costume.source !== 'upload' && recipe.costume.关键词 ? ` (reference keywords: ${recipe.costume.关键词})` : ''
+    clauses.push(
+      `• Outfit: dress the person in the complete outfit and accessories shown in image ${idx}${kw}. The color, cut, fabric and accessories of every item must follow image ${idx}.`
+    )
+    idx++
+  }
+  if (recipe.pose) {
+    const wear = costumeIdx ? `, wearing the outfit from image ${costumeIdx}` : ''
+    const body = isPhoto ? `The final person is a real human with natural skin${wear}` : `Render skin and materials according to the style${wear}`
+    clauses.push(
+      opts.poseSkeleton
+        ? `• Pose: image ${idx} is a human skeleton keypoint map. Pose the person exactly like the skeleton (limbs, torso and head positions). Do not draw the skeleton lines or dots. ${body}.`
+        : recipe.pose.source === 'upload'
+          ? `• Pose: copy the body pose and camera angle of the person in image ${idx}, but not their appearance or clothes. ${body}.`
+          : `• Pose: copy the pose and camera angle of the mannequin in image ${idx}. Image ${idx} is only a pose guide. ${body}.`
+    )
+    idx++
+  }
+  if (recipe.scene) {
+    clauses.push(`• Scene: place the person in the environment shown in image ${idx}${recipe.scene.note ? ` (${recipe.scene.note})` : ''}, matching its perspective and lighting so the person blends in naturally.`)
+    idx++
+  }
+  if (recipe.expression) {
+    clauses.push(`• Expression: use the facial expression from image ${idx}${recipe.expression.note ? ` (${recipe.expression.note})` : ''} without changing the person's identity.`)
+    idx++
+  }
+  if (recipe.prop) {
+    clauses.push(`• Prop: the person naturally holds or uses the prop from image ${idx}${recipe.prop.note ? ` (${recipe.prop.note})` : ''}; keep its shape, color and material.`)
+    idx++
+  }
+  for (const extra of recipe.extraImages || []) {
+    clauses.push(`• Extra reference: blend in elements, accessories, background or lighting details from image ${idx}${extra.name ? ` (${extra.name})` : ''}.`)
+    idx++
+  }
+  if (clauses.length === 0) return 'Please select a portrait / outfit / pose or upload a reference image first.'
+
+  const lines = [`Using the ${clauses.length} reference images provided, generate one complete ${isPhoto ? 'photograph of a real person' : 'character image'}:`, ...clauses]
+  if (styleInfo.en) lines.push(`• Style: ${styleInfo.en} Natural body proportions, natural hands and face, consistent lighting.`)
+  lines.push('No text, logos or watermarks anywhere in the image.')
   return lines.join('\n')
 }
 
@@ -245,37 +414,7 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 }
 
 export async function stitchRecipeCanvas(recipe: RecipeState): Promise<string> {
-  const list: Array<{ tag: string; sub: string; src: string }> = []
-  let idx = 1
-
-  if (recipe.portrait) {
-    list.push({
-      tag: `图${idx++} · 人像`,
-      sub: recipe.portrait.标题,
-      src: recipe.portrait.原图 || recipe.portrait.缩略图,
-    })
-  }
-  if (recipe.costume) {
-    list.push({
-      tag: `图${idx++} · 服装`,
-      sub: `${recipe.costume.分类} · ${recipe.costume.服装名称}`,
-      src: recipe.costume.预览图 || recipe.costume.原图 || recipe.costume.缩略图,
-    })
-  }
-  if (recipe.pose) {
-    list.push({
-      tag: `图${idx++} · 姿势`,
-      sub: `${recipe.pose.姿势名称}（${recipe.pose.角度}）`,
-      src: recipe.pose.原图 || recipe.pose.缩略图,
-    })
-  }
-  for (const extra of recipe.extraImages || []) {
-    list.push({
-      tag: `图${idx++} · 附加`,
-      sub: extra.name || '自定义参考图',
-      src: extra.url,
-    })
-  }
+  const list = recipeReferences(recipe).map((ref, i) => ({ tag: `图${i + 1} · ${ref.label}`, sub: ref.sub, src: ref.src }))
 
   if (!list.length) {
     throw new Error('请至少选择或上传 1 张参考图')
@@ -441,7 +580,7 @@ function extractUniversalImage(json: any): string | null {
 type ComfyNode = { class_type: string; inputs: Record<string, any>; _meta?: { title?: string } }
 type ComfyWorkflow = Record<string, ComfyNode>
 
-export type ComfyPresetId = 'qwen2509_3img' | 'qwen2509_2img' | 'qwen21_3img' | 'qwen21_2img'
+export type ComfyPresetId = 'qwen2509_3img' | 'qwen2509_3img_dwpose' | 'qwen2509_2img' | 'qwen21_3img' | 'qwen21_2img'
 
 export interface ComfyNodeMappings {
   promptNodeId: string
@@ -495,6 +634,40 @@ function buildQwen2509TwoImage(): ComfyWorkflow {
   }
   wf['14'].inputs.positive = ['24', 0]
   wf['14'].inputs.negative = ['26', 0]
+  return wf
+}
+
+// 骨架控制版（实验性）：姿势图先经 DWPose 提取人体骨架，再把骨架图作为图3 同时送入视觉语言编码器和像素参考。
+// Qwen Image Edit 2509 原生理解关键点骨架图，可显著提高动作还原度，且不会照搬人偶的关节球和分块线条。
+// 需要安装自定义节点 comfyui_controlnet_aux（提供 DWPreprocessor，首次运行会自动下载 DWPose 模型）。
+function buildQwen2509Skeleton(): ComfyWorkflow {
+  const wf = cloneWorkflow(qwen2509ThreeImageWorkflow) as ComfyWorkflow
+  wf['3']._meta = { title: '图3：姿势参考 (Pose，将自动提取骨架)' }
+  wf['30'] = {
+    inputs: {
+      image: ['3', 0],
+      detect_hand: 'enable',
+      detect_body: 'enable',
+      detect_face: 'enable',
+      resolution: 1024,
+      bbox_detector: 'yolox_l.onnx',
+      pose_estimator: 'dw-ll_ucoco_384_bs5.torchscript.pt',
+      scale_stick_for_xinsr_cn: 'disable',
+    },
+    class_type: 'DWPreprocessor',
+    _meta: { title: 'DWPose 提取姿势骨架' },
+  }
+  wf['31'] = {
+    inputs: { image: ['30', 0], upscale_method: 'lanczos', megapixels: 1.0, resolution_steps: 16 },
+    class_type: 'ImageScaleToTotalPixels',
+    _meta: { title: '骨架图缩放' },
+  }
+  wf['32'] = { inputs: { pixels: ['31', 0], vae: ['9', 0] }, class_type: 'VAEEncode', _meta: { title: '骨架图编码' } }
+  wf['33'] = { inputs: { conditioning: ['25', 0], latent: ['32', 0] }, class_type: 'ReferenceLatent', _meta: { title: '正向：骨架参考' } }
+  wf['34'] = { inputs: { conditioning: ['27', 0], latent: ['32', 0] }, class_type: 'ReferenceLatent', _meta: { title: '反向：骨架参考' } }
+  for (const id of ['12', '13']) wf[id].inputs.image3 = ['30', 0]
+  wf['14'].inputs.positive = ['33', 0]
+  wf['14'].inputs.negative = ['34', 0]
   return wf
 }
 
@@ -593,6 +766,11 @@ export const COMFYUI_WORKFLOW_TEMPLATES: Record<
   qwen2509_3img: {
     label: 'Qwen Image Edit 2509 三图合成（人像+服装+姿势）· 推荐',
     workflow: qwen2509ThreeImageWorkflow as ComfyWorkflow,
+    defaults: { promptNodeId: '12', portraitNodeId: '1', costumeNodeId: '2', poseNodeId: '3', stitchedNodeId: 'none' },
+  },
+  qwen2509_3img_dwpose: {
+    label: 'Qwen Image Edit 2509 三图合成 + DWPose 骨架控制（需 controlnet_aux）· 实验',
+    workflow: buildQwen2509Skeleton(),
     defaults: { promptNodeId: '12', portraitNodeId: '1', costumeNodeId: '2', poseNodeId: '3', stitchedNodeId: 'none' },
   },
   qwen2509_2img: {
@@ -1307,12 +1485,7 @@ export async function generateCharacterImage(params: {
     throw new Error(`请先配置 ${PROVIDER_META[provider].name} 的 API Key`)
   }
 
-  const rawSources = [
-    recipe.portrait && (recipe.portrait.原图 || recipe.portrait.缩略图),
-    recipe.costume && (recipe.costume.预览图 || recipe.costume.原图 || recipe.costume.缩略图),
-    recipe.pose && (recipe.pose.原图 || recipe.pose.缩略图),
-    ...(recipe.extraImages || []).map((x) => x.url),
-  ].filter(Boolean) as string[]
+  const rawSources = recipeReferences(recipe).map((ref) => ref.src).filter(Boolean)
 
   if (!rawSources.length) {
     throw new Error('请先选择或上传至少 1 张参考图')
@@ -1632,4 +1805,158 @@ export async function generateCharacterImage(params: {
   }
 
   return { imageUrl, modelUsed: model, providerUsed: provider }
+}
+
+// ============================================================================
+// 图生视频：把生成结果作为首帧，提交到用户导入的 ComfyUI 视频工作流（如 H3 / Wan 图生视频）
+// ============================================================================
+
+export interface ComfyVideoResult {
+  url: string
+  blob: Blob
+  filename: string
+  isVideo: boolean
+}
+
+/** 识别视频工作流中的首帧 LoadImage 节点与提示词节点 */
+export function detectVideoWorkflowNodes(workflowJson: string): { imageNodeId: string; promptNodeId: string } {
+  const info = parseComfyWorkflowNodes(workflowJson)
+  if (!info.valid) return { imageNodeId: 'none', promptNodeId: 'none' }
+  const firstFrame =
+    info.imageNodes.find((n) => /首帧|first|start|i2v|input/i.test(n.title)) ?? info.imageNodes[0]
+  const positive =
+    info.promptNodes.find((n) => /正向|positive|prompt/i.test(n.title) && !/负|negative/i.test(n.title)) ??
+    info.promptNodes.find((n) => !/负|negative/i.test(n.title)) ??
+    info.promptNodes[0]
+  return { imageNodeId: firstFrame?.id ?? 'none', promptNodeId: positive?.id ?? 'none' }
+}
+
+const VIDEO_EXT = /\.(mp4|webm|mov|mkv|gif|webp)$/i
+
+export async function generateVideoWithComfy(params: {
+  baseUrl: string
+  apiKey: string
+  workflowJson: string
+  imageNodeId: string
+  promptNodeId: string
+  imageSrc: string
+  prompt: string
+  timeoutSec: number
+  randomizeSeed: boolean
+  onProgress?: (p: GenerationProgress) => void
+}): Promise<ComfyVideoResult> {
+  const report = params.onProgress ?? (() => {})
+  const baseUrl = normalizeComfyBase(params.baseUrl)
+  const { apiKey } = params
+  const info = parseComfyWorkflowNodes(params.workflowJson)
+  if (!info.valid) throw new Error(`[ComfyUI] ${info.error || '视频工作流 JSON 无效'}`)
+  if (!params.imageNodeId || params.imageNodeId === 'none') throw new Error('[ComfyUI] 请先选择视频工作流的首帧图片节点')
+
+  report({ stage: 'check', message: '正在检查 ComfyUI 服务与视频工作流…' })
+  await testComfyConnection(baseUrl, apiKey)
+  const check = await checkComfyWorkflow(baseUrl, apiKey, params.workflowJson, [params.imageNodeId])
+  if (!check.ok) throw new Error(`[ComfyUI] 视频工作流与本机不匹配：\n${check.errors.join('\n')}`)
+  const workflow: ComfyWorkflow = JSON.parse(check.fixedJson ?? params.workflowJson)
+
+  report({ stage: 'upload', message: '正在上传首帧图片…' })
+  workflow[params.imageNodeId].inputs.image = await uploadImageToComfy(baseUrl, params.imageSrc, 'studio_first_frame', apiKey)
+
+  if (params.promptNodeId && params.promptNodeId !== 'none' && workflow[params.promptNodeId]?.inputs && params.prompt.trim()) {
+    const inputs = workflow[params.promptNodeId].inputs
+    for (const field of ['prompt', 'text', 'string', 'positive', 'positive_prompt']) {
+      if (typeof inputs[field] === 'string') {
+        inputs[field] = params.prompt
+        break
+      }
+    }
+  }
+  if (params.randomizeSeed) {
+    const nextSeed = Math.floor(Math.random() * 90000000000000) + 1000000
+    for (const node of Object.values<any>(workflow)) {
+      if (!node?.inputs) continue
+      if (typeof node.inputs.seed === 'number') node.inputs.seed = nextSeed
+      if (typeof node.inputs.noise_seed === 'number') node.inputs.noise_seed = nextSeed
+    }
+  }
+
+  const clientId = `pose_studio_video_${Math.random().toString(36).slice(2, 10)}`
+  let promptId = ''
+  let lastNodeTitle = ''
+  const ws = openComfySocket(baseUrl, clientId, (msg) => {
+    const d = msg?.data
+    if (!d || (promptId && d.prompt_id && d.prompt_id !== promptId)) return
+    if (msg.type === 'executing' && d.node) {
+      lastNodeTitle = workflow[d.node]?._meta?.title || workflow[d.node]?.class_type || d.node
+      report({ stage: 'running', message: `正在执行：${lastNodeTitle}` })
+    } else if (msg.type === 'progress' && d.max) {
+      report({ stage: 'running', message: `${lastNodeTitle || '采样中'}（${d.value}/${d.max}）`, percent: Math.round((d.value / d.max) * 100) })
+    }
+  })
+
+  try {
+    report({ stage: 'queue', message: '正在提交视频工作流…' })
+    const promptRes = await comfyFetch(
+      baseUrl,
+      '/prompt',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: workflow, client_id: clientId }) },
+      apiKey,
+      60000
+    )
+    const promptJson = await readJsonSafe(promptRes)
+    if (!promptRes.ok || !promptJson?.prompt_id) throw new Error(formatComfyPromptError(promptJson, workflow, promptRes.status))
+    promptId = promptJson.prompt_id
+    report({ stage: 'queue', message: '已提交，等待 ComfyUI 执行…' })
+
+    const startedAt = Date.now()
+    const timeoutSec = Math.max(60, params.timeoutSec || 1800)
+    for (;;) {
+      await sleep(2000)
+      if (Date.now() - startedAt > timeoutSec * 1000) {
+        await cancelComfyPrompt(baseUrl, apiKey, promptId)
+        throw new Error(`[ComfyUI] 等待视频结果超时（超过 ${Math.round(timeoutSec / 60)} 分钟），已取消该任务。`)
+      }
+      let histRes: Response
+      try {
+        histRes = await comfyFetch(baseUrl, `/history/${promptId}`, {}, apiKey, 15000)
+      } catch {
+        continue
+      }
+      if (!histRes.ok) continue
+      const item = (await readJsonSafe(histRes))?.[promptId]
+      if (!item) continue
+      if (item.status?.status_str === 'error') {
+        const { text, oom } = formatExecutionError(item.status?.messages, workflow)
+        if (oom) await freeComfyMemory(baseUrl, apiKey)
+        throw new Error(text)
+      }
+      if (item.status && item.status.completed === false && item.status.status_str !== 'success') continue
+
+      // VideoHelperSuite 的 VHS_VideoCombine 输出在 gifs 字段；官方 SaveVideo / SaveWEBM 输出在 images / videos / animated 字段
+      const files: Array<{ filename: string; subfolder?: string; type?: string }> = []
+      for (const nodeOut of Object.values<any>(item.outputs || {})) {
+        for (const key of ['gifs', 'videos', 'animated', 'images']) {
+          const arr = nodeOut?.[key]
+          if (Array.isArray(arr)) for (const f of arr) if (f?.filename) files.push(f)
+        }
+      }
+      const pick =
+        files.find((f) => /\.(mp4|webm|mov|mkv)$/i.test(f.filename) && f.type === 'output') ??
+        files.find((f) => VIDEO_EXT.test(f.filename)) ??
+        files.find((f) => f.type === 'output') ??
+        files[0]
+      if (!pick) {
+        if (item.status?.completed) throw new Error('[ComfyUI] 工作流已执行完成，但没有找到视频输出（请检查是否有 VHS_VideoCombine / SaveVideo 节点）')
+        continue
+      }
+      report({ stage: 'download', message: '正在获取视频…', percent: 100 })
+      const qs = new URLSearchParams({ filename: pick.filename, subfolder: pick.subfolder || '', type: pick.type || 'output' })
+      const viewRes = await comfyFetch(baseUrl, `/view?${qs.toString()}`, {}, apiKey, 300000)
+      if (!viewRes.ok) throw new Error(`[ComfyUI] 获取视频失败 (HTTP ${viewRes.status})`)
+      const blob = await viewRes.blob()
+      const isVideo = /\.(mp4|webm|mov|mkv)$/i.test(pick.filename) || blob.type.startsWith('video/')
+      return { url: URL.createObjectURL(blob), blob, filename: pick.filename, isVideo }
+    }
+  } finally {
+    ws?.close()
+  }
 }
