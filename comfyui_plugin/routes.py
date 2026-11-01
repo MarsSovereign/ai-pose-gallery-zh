@@ -47,10 +47,8 @@ def find_item(lib: str, item_id: str) -> dict:
 def resolve_safe_image_path(rel_path: str) -> Path:
     clean = (rel_path or "").strip().lstrip("/")
     candidate = (ROOT_DIR / clean).resolve()
-    if not (
-        str(candidate).startswith(str(THUMBS_DIR) + "/")
-        or str(candidate).startswith(str(IMG_DIR) + "/")
-    ):
+    # 用 Path.is_relative_to 判断，兼容 Windows 反斜杠路径
+    if not (candidate.is_relative_to(THUMBS_DIR) or candidate.is_relative_to(IMG_DIR)):
         raise ValueError("非法图片路径")
     if not candidate.is_file():
         raise FileNotFoundError(f"图片文件不存在: {clean}")

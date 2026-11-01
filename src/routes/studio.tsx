@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import {
   ChevronDownIcon,
   CircleAlertIcon,
@@ -10,6 +10,7 @@ import {
   DicesIcon,
   DownloadIcon,
   FileUpIcon,
+  FolderHeartIcon,
   ImagePlusIcon,
   KeyRoundIcon,
   LayoutGridIcon,
@@ -19,6 +20,7 @@ import {
   ScanSearchIcon,
   RotateCcwIcon,
   ShirtIcon,
+  Share2Icon,
   SlidersHorizontalIcon,
   SparklesIcon,
   Trash2Icon,
@@ -29,6 +31,12 @@ import { type ChangeEvent, type DragEvent, useEffect, useMemo, useRef, useState 
 import { toast } from 'sonner'
 import { costumesQuery, portraitsQuery, posesQuery } from '@/api/gallery'
 import { Field, Section } from '@/components/common/FormSection'
+import { BatchPanel } from '@/components/studio/BatchPanel'
+import { ExtraSlots } from '@/components/studio/ExtraSlots'
+import { LibraryPickerDialog } from '@/components/studio/LibraryPickerDialog'
+import { VideoPanel } from '@/components/studio/VideoPanel'
+import { addLibraryDataUrl, applyAssetToRecipe } from '@/lib/myLibrary'
+import { decodeRecipe, encodeRecipe, resolveSharedRecipe, shareUrl } from '@/lib/shareRecipe'
 import { PageHeader } from '@/components/common/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -38,6 +46,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import {
+  allStyleOptions,
   autoDetectComfyMappings,
   buildRecipePrompt,
   type ComfyCheckResult,
@@ -49,10 +58,9 @@ import {
   parseComfyWorkflowNodes,
   PROVIDER_META,
   stitchRecipeCanvas,
-  STYLE_PRESETS,
 } from '@/services/aiGenerator'
 import { referenceImageUrl, uploadedReferences } from '@/lib/recipeImages'
-import { useStudio } from '@/store/studioStore'
+import { promptOptionsFor, useStudio } from '@/store/studioStore'
 import type {
   ComfyUiParams,
   DoubaoParams,
@@ -60,11 +68,14 @@ import type {
   GptParams,
   ImagePassMode,
   ImageProviderId,
+  PromptLang,
   QwenParams,
 } from '@/types/gallery'
 
 export const Route = createFileRoute('/studio')({
   staticData: { title: 'AI 合成台' },
+  validateSearch: (search: Record<string, unknown>): { r?: string } =>
+    typeof search.r === 'string' && search.r ? { r: search.r } : {},
   component: StudioPage,
 })
 
@@ -100,7 +111,53 @@ function StudioPage() {
     randomizeRecipe,
     removeHistoryItem,
     clearHistory,
+    replaceRecipe,
   } = useStudio()
+  const search = Route.useSearch()
+  const navigate = useNavigate()
+  const [libraryPicker, setLibraryPicker] = useState<'portrait' | 'costume' | 'pose' | null>(null)
+
+  // 打开分享链接：按图库 ID 还原配方（ref 防止开发模式下 effect 重复执行）
+  const loadedShareRef = useRef('')
+  useEffect(() => {
+    if (!search.r || loadedShareRef.current === search.r) return
+    loadedShareRef.current = search.r
+    const shared = decodeRecipe(search.r)
+    void navigate({ to: '/studio', search: {}, replace: true })
+    if (!shared) {
+      toast.error('分享链接无效')
+      return
+    }
+    void (async () => {
+      const [posesRes, costumes, portraits] = await Promise.all([
+        qc.ensureQueryData(posesQuery),
+        qc.ensureQueryData(costumesQuery),
+        qc.ensureQueryData(portraitsQuery),
+      ])
+      const { recipe: next, missing } = resolveSharedRecipe(shared, { portraits, costumes, poses: posesRes.items })
+      replaceRecipe(next)
+      if (shared.s) updateApiConfig({ stylePreset: shared.s })
+      toast.success(missing.length ? `已载入分享的配方（找不到：${missing.join('、')}）` : '已载入分享的配方')
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search.r])
+
+  const handleShare = async () => {
+    const { code, skipped } = encodeRecipe(recipe, apiConfig.stylePreset)
+    const url = shareUrl(code)
+    try {
+      await navigator.clipboard.writeText(url)
+      toast.success(skipped.length ? `已复制分享链接（本机上传的${skipped.join('、')}无法放进链接）` : '已复制分享链接')
+    } catch {
+      window.prompt('复制下面的分享链接：', url)
+    }
+  }
+
+  const handleSaveResultToLibrary = async () => {
+    if (!previewUrl) return
+    await addLibraryDataUrl('portrait', `生成角色 ${new Date().toLocaleString('zh-CN', { hour12: false })}`, previewUrl)
+    toast.success('已存入「我的素材库 · 人像」，以后可直接作为同一角色的人像参考')
+  }
   const qc = useQueryClient()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const comfyFileInputRef = useRef<HTMLInputElement | null>(null)
@@ -114,7 +171,8 @@ function StudioPage() {
   const providerMeta = PROVIDER_META[activeProvider]
   const providerCfg = apiConfig.providers[activeProvider]
 
-  const defaultPrompt = buildRecipePrompt(recipe, apiConfig.stylePreset)
+  const defaultPrompt = buildRecipePrompt(recipe, apiConfig.stylePreset, promptOptionsFor(apiConfig))
+  const styleOptions = allStyleOptions(apiConfig.customStyles)
   const prompt = customPrompt ?? defaultPrompt
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [extraUrlInput, setExtraUrlInput] = useState('')
@@ -403,6 +461,12 @@ function StudioPage() {
                   className="hidden"
                   onChange={handleUploadFiles}
                 />
+                {hasAnyRef && (
+                  <Button variant="ghost" size="sm" className="h-8 px-2.5 text-xs" onClick={() => void handleShare()}>
+                    <Share2Icon className="size-3.5" />
+                    分享
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   size="sm"
@@ -473,6 +537,9 @@ function StudioPage() {
                       </div>
                       <span className="truncate text-xs">+ 选人像</span>
                     </Link>
+                    <Button type="button" variant="ghost" size="sm" aria-label="从素材库选择人像" title="从我的素材库选择" className="h-11 shrink-0 border-l px-2" onClick={() => setLibraryPicker('portrait')}>
+                      <FolderHeartIcon className="size-3.5" />
+                    </Button>
                     <Button type="button" variant="ghost" size="sm" aria-label="上传人像参考图" aria-describedby={showReferenceErrors && missingReferences.includes('人像') ? 'reference-errors' : undefined} aria-busy={uploadingSlot === 'portrait'} disabled={uploadingSlot !== null} className="h-11 shrink-0 border-l px-2 text-xs" onClick={() => { uploadSlotRef.current = 'portrait'; slotInputRef.current?.click() }}>
                       {uploadingSlot === 'portrait' ? <LoaderCircleIcon className="size-3.5 animate-spin motion-reduce:animate-none" /> : <ImagePlusIcon className="size-3.5" />}
                       {uploadingSlot === 'portrait' ? '处理中' : '上传'}
@@ -519,6 +586,9 @@ function StudioPage() {
                       </div>
                       <span className="truncate text-xs">+ 选服装</span>
                     </Link>
+                    <Button type="button" variant="ghost" size="sm" aria-label="从素材库选择服装" title="从我的素材库选择" className="h-11 shrink-0 border-l px-2" onClick={() => setLibraryPicker('costume')}>
+                      <FolderHeartIcon className="size-3.5" />
+                    </Button>
                     <Button type="button" variant="ghost" size="sm" aria-label="上传服装参考图" aria-describedby={showReferenceErrors && missingReferences.includes('服装') ? 'reference-errors' : undefined} aria-busy={uploadingSlot === 'costume'} disabled={uploadingSlot !== null} className="h-11 shrink-0 border-l px-2 text-xs" onClick={() => { uploadSlotRef.current = 'costume'; slotInputRef.current?.click() }}>
                       {uploadingSlot === 'costume' ? <LoaderCircleIcon className="size-3.5 animate-spin motion-reduce:animate-none" /> : <ImagePlusIcon className="size-3.5" />}
                       {uploadingSlot === 'costume' ? '处理中' : '上传'}
@@ -565,6 +635,9 @@ function StudioPage() {
                       </div>
                       <span className="truncate text-xs">+ 选姿势</span>
                     </Link>
+                    <Button type="button" variant="ghost" size="sm" aria-label="从素材库选择姿势" title="从我的素材库选择" className="h-11 shrink-0 border-l px-2" onClick={() => setLibraryPicker('pose')}>
+                      <FolderHeartIcon className="size-3.5" />
+                    </Button>
                     <Button type="button" variant="ghost" size="sm" aria-label="上传姿势参考图" aria-describedby={showReferenceErrors && missingReferences.includes('姿势') ? 'reference-errors' : undefined} aria-busy={uploadingSlot === 'pose'} disabled={uploadingSlot !== null} className="h-11 shrink-0 border-l px-2 text-xs" onClick={() => { uploadSlotRef.current = 'pose'; slotInputRef.current?.click() }}>
                       {uploadingSlot === 'pose' ? <LoaderCircleIcon className="size-3.5 animate-spin motion-reduce:animate-none" /> : <ImagePlusIcon className="size-3.5" />}
                       {uploadingSlot === 'pose' ? '处理中' : '上传'}
@@ -573,6 +646,8 @@ function StudioPage() {
                 )}
               </div>
             </div>
+
+            <ExtraSlots />
 
             {/* 附加参考图列表 + 可视化拖拽/粘贴上传框 */}
             <div className="space-y-2 pt-1">
@@ -847,11 +922,23 @@ function StudioPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {Object.entries(STYLE_PRESETS).map(([key, info]) => (
-                    <SelectItem key={key} value={key}>
+                  {styleOptions.map((info) => (
+                    <SelectItem key={info.key} value={info.key}>
                       {info.label}
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </Field>
+
+            <Field label="提示词语言" hint="Qwen / 豆包 / Gemini 用中文即可；只认英文的模型选英文">
+              <Select value={apiConfig.promptLang} onValueChange={(v) => updateApiConfig({ promptLang: v as PromptLang })}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="zh">中文</SelectItem>
+                  <SelectItem value="en">English</SelectItem>
                 </SelectContent>
               </Select>
             </Field>
@@ -1340,6 +1427,9 @@ function StudioPage() {
               )}
             </Button>
           </Section>
+
+          <BatchPanel />
+          {activeProvider === 'comfyui' || apiConfig.videoParams.workflowJson ? <VideoPanel /> : null}
         </div>
 
         {/* 右栏：专注展示 AI 生成结果与生成状态 */}
@@ -1349,12 +1439,18 @@ function StudioPage() {
             className="md:grid-cols-1"
             actions={
               previewUrl && !isGenerating ? (
-                <Button variant="outline" size="sm" asChild>
-                  <a href={previewUrl} download="image.png">
-                    <DownloadIcon className="size-3.5" />
-                    下载图片
-                  </a>
-                </Button>
+                <div className="flex gap-1.5">
+                  <Button variant="ghost" size="sm" onClick={() => void handleSaveResultToLibrary()} title="存为人像素材，用于锁定同一角色">
+                    <FolderHeartIcon className="size-3.5" />
+                    存入素材库
+                  </Button>
+                  <Button variant="outline" size="sm" asChild>
+                    <a href={previewUrl} download="image.png">
+                      <DownloadIcon className="size-3.5" />
+                      下载图片
+                    </a>
+                  </Button>
+                </div>
               ) : null
             }
           >
@@ -1585,6 +1681,18 @@ function StudioPage() {
           />
         </DialogContent>
       </Dialog>
+
+      {libraryPicker && (
+        <LibraryPickerDialog
+          kind={libraryPicker}
+          open
+          onOpenChange={(o) => !o && setLibraryPicker(null)}
+          onPick={(asset) => {
+            replaceRecipe(applyAssetToRecipe(recipe, { ...asset, kind: libraryPicker }))
+            toast.success(`已放入${{ portrait: '人像', costume: '服装', pose: '姿势' }[libraryPicker]}槽位`)
+          }}
+        />
+      )}
     </>
   )
 }

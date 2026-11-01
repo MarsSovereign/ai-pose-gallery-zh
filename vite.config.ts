@@ -67,10 +67,40 @@ function localAssetsAndProxyPlugin(): Plugin {
     }
   }
 
+  // AI 语义搜索模型文件同源转发（与 functions/hf/[[path]].ts 规则一致）
+  const handleHf = async (rawUrl: string, res: any) => {
+    const m = rawUrl.match(/^\/hf\/(mirror|hf)\/(.+)$/)
+    if (!m || !/^Xenova\/chinese-clip-vit-base-patch16\/resolve\/[\w.-]+\/[\w./-]+$/.test(m[2]) || m[2].includes('..')) {
+      res.statusCode = 403
+      res.end('Not allowed')
+      return
+    }
+    try {
+      const host = m[1] === 'mirror' ? 'https://hf-mirror.com' : 'https://huggingface.co'
+      const upstream = await fetch(`${host}/${m[2]}`, { redirect: 'follow' })
+      res.statusCode = upstream.status
+      for (const key of ['content-type', 'content-length', 'etag']) {
+        const v = upstream.headers.get(key)
+        if (v) res.setHeader(key, v)
+      }
+      res.setHeader('Cache-Control', upstream.ok ? 'public, max-age=2592000' : 'no-store')
+      if (!upstream.body) return res.end()
+      const { Readable } = await import('node:stream')
+      Readable.fromWeb(upstream.body as any).pipe(res)
+    } catch (err: any) {
+      res.statusCode = 502
+      res.end(`模型下载失败：${err?.message || err}`)
+    }
+  }
+
   const serve = (req: any, res: any, next: any) => {
     const rawUrl = (req.url || '').split('?')[0]
     if (rawUrl === '/api/proxy') {
       void handleProxy(req, res)
+      return
+    }
+    if (rawUrl.startsWith('/hf/')) {
+      void handleHf(rawUrl, res)
       return
     }
     const decoded = decodeURIComponent(rawUrl)

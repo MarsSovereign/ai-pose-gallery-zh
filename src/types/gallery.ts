@@ -58,11 +58,55 @@ export interface ExtraReferenceImage {
   url: string
 }
 
+/** 「我的素材库」支持的素材类型：三大核心槽位 + 场景 / 表情 / 道具扩展槽位 */
+export type LibraryKind = 'portrait' | 'costume' | 'pose' | 'scene' | 'expression' | 'prop'
+export type ExtraSlotKind = 'scene' | 'expression' | 'prop'
+
+export interface LibraryAsset {
+  id: string
+  kind: LibraryKind
+  name: string
+  note: string
+  /** 压缩后的 data URL（最长边 1024） */
+  url: string
+  width: number
+  height: number
+  createdAt: number
+}
+
+/** 场景 / 表情 / 道具槽位的引用 */
+export interface SlotAssetRef {
+  id: string
+  name: string
+  note?: string
+  url: string
+}
+
 export interface RecipeState {
   portrait: PortraitItem | null
   costume: CostumeItem | null
   pose: PoseItem | null
+  scene?: SlotAssetRef | null
+  expression?: SlotAssetRef | null
+  prop?: SlotAssetRef | null
   extraImages?: ExtraReferenceImage[]
+}
+
+export type PromptLang = 'zh' | 'en'
+
+export interface CustomStylePreset {
+  id: string
+  label: string
+  prompt: string
+}
+
+/** 图生视频：用户导入的 ComfyUI 视频工作流（API 格式） */
+export interface VideoWorkflowParams {
+  workflowJson: string
+  imageNodeId: string
+  promptNodeId: string
+  timeoutSec: number
+  randomizeSeed: boolean
 }
 
 export type ImageProviderId = 'gemini' | 'gpt' | 'qwen' | 'doubao' | 'comfyui'
@@ -77,7 +121,7 @@ export interface ProviderEndpointConfig {
 export type ImagePassMode = 'url' | 'base64'
 
 export interface ComfyUiParams {
-  workflowPreset: 'qwen2509_3img' | 'qwen2509_2img' | 'qwen21_3img' | 'qwen21_2img' | 'custom'
+  workflowPreset: 'qwen2509_3img' | 'qwen2509_3img_dwpose' | 'qwen2509_2img' | 'qwen21_3img' | 'qwen21_2img' | 'custom'
   workflowJson: string
   promptNodeId: string
   portraitNodeId: string
@@ -127,6 +171,9 @@ export interface ApiConfig {
   imagePassMode: ImagePassMode
   useProxy: boolean
   stylePreset: string
+  /** 提示词语言：中文适合 Qwen / 豆包 / Gemini，英文适合只认英文的模型 */
+  promptLang: PromptLang
+  customStyles: CustomStylePreset[]
   sendStitchedSheet: boolean
   providers: Record<ImageProviderId, ProviderEndpointConfig>
   gptParams: GptParams
@@ -134,6 +181,7 @@ export interface ApiConfig {
   qwenParams: QwenParams
   doubaoParams: DoubaoParams
   comfyuiParams: ComfyUiParams
+  videoParams: VideoWorkflowParams
 }
 
 export interface GenerationHistoryItem {
@@ -144,4 +192,7 @@ export interface GenerationHistoryItem {
   prompt: string
   imageUrl: string
   recipeSummary: string
+  /** 生成时的配方快照（不含上传图片），用于导出人物卡 / 复现 */
+  recipe?: RecipeState
+  kind?: 'image' | 'sheet' | 'batch'
 }

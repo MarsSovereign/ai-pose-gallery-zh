@@ -9,12 +9,18 @@ import {
   ExternalLinkIcon,
   PlusIcon,
   RotateCcwIcon,
+  ScanSearchIcon,
   SearchIcon,
+  StarIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { costumesQuery, isNsfwCostume, isNsfwCostumeCategory } from '@/api/gallery'
 import { EmptyState } from '@/components/common/EmptyState'
+import { FavoriteButton, SmartSearchBar } from '@/components/gallery/SmartSearchBar'
+import { type AiResult, applyAiOrder } from '@/lib/aiResult'
+import { searchSimilarTo } from '@/lib/clipSearch'
+import { toggleFavorite, useFavorites } from '@/lib/favorites'
 import { PageHeader } from '@/components/common/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -41,6 +47,9 @@ function CostumesPage() {
   const [query, setQuery] = useState('')
   const [shown, setShown] = useState(60)
   const [viewerIndex, setViewerIndex] = useState<number | null>(null)
+  const [aiResult, setAiResult] = useState<AiResult | null>(null)
+  const [onlyFav, setOnlyFav] = useState(false)
+  const favs = useFavorites('costume')
 
   const activeCategory = safeMode && category && isNsfwCostumeCategory(category) ? '' : category
 
@@ -63,13 +72,15 @@ function CostumesPage() {
   const q = query.trim().toLowerCase()
 
   const filtered = useMemo(() => {
-    return baseCostumes.filter((item) => {
+    const list = baseCostumes.filter((item) => {
       if (activeCategory && item.分类 !== activeCategory) return false
       if (tag !== 'all' && !(item.标签 || []).includes(tag)) return false
       if (q && !item.检索.toLowerCase().includes(q)) return false
+      if (onlyFav && !favs.has(item.id)) return false
       return true
     })
-  }, [baseCostumes, activeCategory, tag, q])
+    return applyAiOrder(list, aiResult)
+  }, [baseCostumes, activeCategory, tag, q, onlyFav, favs, aiResult])
 
   const currentItem = viewerIndex !== null ? filtered[viewerIndex] : null
 
@@ -187,12 +198,30 @@ function CostumesPage() {
             setCategory('')
             setTag('all')
             setQuery('')
+            setAiResult(null)
+            setOnlyFav(false)
             setShown(60)
           }}
         >
           <RotateCcwIcon className="size-3.5" />
           重置
         </Button>
+        <div className="col-span-full">
+          <SmartSearchBar
+            lib="costume"
+            aiResult={aiResult}
+            onAiResult={(r) => {
+              setAiResult(r)
+              setShown(60)
+            }}
+            onlyFavorites={onlyFav}
+            onOnlyFavoritesChange={(v) => {
+              setOnlyFav(v)
+              setShown(60)
+            }}
+            favoriteCount={favs.size}
+          />
+        </div>
       </div>
 
       {filtered.length === 0 ? (
@@ -238,6 +267,11 @@ function CostumesPage() {
                     {picked ? <CheckIcon className="size-3" /> : <PlusIcon className="size-3" />}
                     {picked ? '已选' : '加入配方'}
                   </button>
+                  <FavoriteButton
+                    active={favs.has(item.id)}
+                    onToggle={() => toggleFavorite('costume', item.id)}
+                    className="absolute right-2 bottom-2"
+                  />
                 </div>
 
                 <div className="flex flex-1 flex-col justify-between px-1.5 pt-2.5 pb-1">
@@ -346,6 +380,28 @@ function CostumesPage() {
                       {picked ? '已在角色配方中（点击移除）' : '加入角色配方'}
                     </Button>
                     <div className="grid grid-cols-2 gap-2">
+                      <Button variant="outline" size="sm" onClick={() => toggleFavorite('costume', currentItem.id)}>
+                        <StarIcon className={cn('size-3.5', favs.has(currentItem.id) && 'fill-amber-400 text-amber-500')} />
+                        {favs.has(currentItem.id) ? '已收藏' : '收藏'}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={async () => {
+                          try {
+                            const res = await searchSimilarTo(currentItem.id, 'costume')
+                            setAiResult({ label: `相似：${currentItem.服装名称.slice(0, 16)}`, ids: res.map((x) => x.id) })
+                            setShown(60)
+                            setViewerIndex(null)
+                            window.scrollTo({ top: 0, behavior: 'smooth' })
+                          } catch (e) {
+                            toast.error(e instanceof Error ? e.message : '找相似失败')
+                          }
+                        }}
+                      >
+                        <ScanSearchIcon className="size-3.5" />
+                        找相似
+                      </Button>
                       <Button variant="outline" size="sm" asChild>
                         <a href={`/${currentItem.原图}`} download={`${currentItem.id}.webp`}>
                           <DownloadIcon className="size-3.5" />

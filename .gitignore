@@ -28,3 +28,6 @@ dist/
 backups/
 img/costume/*.png
 img/portrait/*.png
+
+# MCP 服务 / 批量生成的本地输出
+output/

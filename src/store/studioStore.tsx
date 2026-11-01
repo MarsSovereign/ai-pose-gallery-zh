@@ -15,6 +15,7 @@ import { idbGet, idbSet } from '@/lib/idbStorage'
 import { recipeBackup } from '@/lib/recipeImages'
 import {
   buildRecipePrompt,
+  type PromptOptions,
   COMFYUI_WORKFLOW_TEMPLATES,
   DEFAULT_COMFY_PRESET,
   generateCharacterImage,
@@ -28,6 +29,9 @@ import type {
   CostumeItem,
   DoubaoParams,
   ExtraReferenceImage,
+  ExtraSlotKind,
+  SlotAssetRef,
+  VideoWorkflowParams,
   GeminiParams,
   GenerationHistoryItem,
   GptParams,
@@ -46,11 +50,23 @@ const SAFE_MODE_KEY = 'pose_atlas_safe_mode_v1'
 
 const COMFY_CONFIG_VERSION = 2
 
+// 安全模式默认值：本机运行（pnpm dev / localhost）默认关闭，部署到公网的站点默认开启。
+// 可用环境变量 VITE_SAFE_MODE=on / off 强制指定。页面顶部按钮切换后以用户的选择为准。
+const DEFAULT_SAFE_MODE = (() => {
+  const env = import.meta.env.VITE_SAFE_MODE as string | undefined
+  if (env === 'on') return true
+  if (env === 'off') return false
+  if (import.meta.env.DEV) return false
+  return !(typeof window !== 'undefined' && ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname))
+})()
+
 const DEFAULT_API_CONFIG: ApiConfig = {
   activeProvider: 'gemini',
   imagePassMode: 'url',
   useProxy: true,
   stylePreset: 'realistic',
+  promptLang: 'zh',
+  customStyles: [],
   sendStitchedSheet: false,
   providers: {
     gemini: {
@@ -119,6 +135,13 @@ const DEFAULT_API_CONFIG: ApiConfig = {
     timeoutSec: 600,
     configVersion: COMFY_CONFIG_VERSION,
   },
+  videoParams: {
+    workflowJson: '',
+    imageNodeId: 'none',
+    promptNodeId: 'none',
+    timeoutSec: 1800,
+    randomizeSeed: true,
+  },
 }
 
 // v1 → v2：旧版默认的 Qwen 2.1 预设引用了本机通常不存在的模型，自动切换为 Qwen Image Edit 2509
@@ -169,7 +192,60 @@ function mergeStoredConfig(raw: unknown): ApiConfig {
     qwenParams: { ...DEFAULT_API_CONFIG.qwenParams, ...obj.qwenParams },
     doubaoParams: { ...DEFAULT_API_CONFIG.doubaoParams, ...obj.doubaoParams },
     comfyuiParams: comfy.params,
+    videoParams: { ...DEFAULT_API_CONFIG.videoParams, ...obj.videoParams },
+    customStyles: Array.isArray(obj.customStyles) ? obj.customStyles : [],
+    promptLang: obj.promptLang === 'en' ? 'en' : 'zh',
   }
+}
+
+/** 当前配置下应使用的提示词选项（语言、自定义画风、骨架预设） */
+// oxlint-disable-next-line react/only-export-components
+export function promptOptionsFor(config: ApiConfig): PromptOptions {
+  return {
+    lang: config.promptLang,
+    customStyles: config.customStyles,
+    poseSkeleton: config.activeProvider === 'comfyui' && config.comfyuiParams.workflowPreset === 'qwen2509_3img_dwpose',
+  }
+}
+
+// oxlint-disable-next-line react/only-export-components
+export function recipeSummaryText(recipe: RecipeState): string {
+  const extraCount = (recipe.extraImages || []).length
+  return [
+    recipe.portrait?.发型名称,
+    recipe.costume?.source === 'upload' ? recipe.costume.服装名称 : recipe.costume?.分类,
+    recipe.pose ? `${recipe.pose.姿势名称}${recipe.pose.角度 ? `(${recipe.pose.角度})` : ''}` : null,
+    recipe.scene ? `场景:${recipe.scene.name}` : null,
+    recipe.expression ? `表情:${recipe.expression.name}` : null,
+    recipe.prop ? `道具:${recipe.prop.name}` : null,
+    extraCount ? `+${extraCount}附图` : null,
+  ]
+    .filter(Boolean)
+    .join(' + ')
+}
+
+export interface BatchJob {
+  label: string
+  recipe: RecipeState
+  /** 不传则按该配方自动生成提示词 */
+  prompt?: string
+}
+
+export interface BatchResult {
+  label: string
+  imageUrl: string
+  recipe: RecipeState
+  prompt: string
+}
+
+export interface BatchState {
+  title: string
+  total: number
+  done: number
+  current: string
+  results: BatchResult[]
+  errors: string[]
+  running: boolean
 }
 
 interface StudioContextValue {
@@ -208,6 +284,13 @@ interface StudioContextValue {
   updateQwenParams: (patch: Partial<QwenParams>) => void
   updateDoubaoParams: (patch: Partial<DoubaoParams>) => void
   updateComfyUiParams: (patch: Partial<ComfyUiParams>) => void
+  updateVideoParams: (patch: Partial<VideoWorkflowParams>) => void
+  setSlotAsset: (kind: ExtraSlotKind, ref: SlotAssetRef | null) => void
+  replaceRecipe: (next: RecipeState) => void
+  batch: BatchState | null
+  runBatch: (title: string, jobs: BatchJob[]) => Promise<BatchResult[]>
+  cancelBatch: () => void
+  clearBatch: () => void
   addHistory: (item: Omit<GenerationHistoryItem, 'id' | 'createdAt'>) => void
   removeHistoryItem: (id: string) => void
   clearHistory: () => void
@@ -225,6 +308,9 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         portrait: parsed.portrait ?? null,
         costume: parsed.costume ?? null,
         pose: parsed.pose ?? null,
+        scene: parsed.scene ?? null,
+        expression: parsed.expression ?? null,
+        prop: parsed.prop ?? null,
         extraImages: Array.isArray(parsed.extraImages) ? parsed.extraImages : [],
       }
     } catch {
@@ -253,9 +339,9 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   const [safeMode, setSafeMode] = useState<boolean>(() => {
     try {
       const raw = localStorage.getItem(SAFE_MODE_KEY)
-      return raw === null ? true : raw !== 'false'
+      return raw === null ? DEFAULT_SAFE_MODE : raw !== 'false'
     } catch {
-      return true
+      return DEFAULT_SAFE_MODE
     }
   })
   const [ageGateOpen, setAgeGateOpen] = useState(false)
@@ -292,6 +378,9 @@ export function StudioProvider({ children }: { children: ReactNode }) {
           portrait: savedRecipe.portrait ?? null,
           costume: savedRecipe.costume ?? null,
           pose: savedRecipe.pose ?? null,
+          scene: savedRecipe.scene ?? null,
+          expression: savedRecipe.expression ?? null,
+          prop: savedRecipe.prop ?? null,
           extraImages: Array.isArray(savedRecipe.extraImages) ? savedRecipe.extraImages : [],
         })
       }
@@ -417,8 +506,16 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     }))
   }
 
+  const setSlotAsset = (kind: ExtraSlotKind, ref: SlotAssetRef | null) => {
+    setRecipe((r) => ({ ...r, [kind]: ref }))
+  }
+
+  const replaceRecipe = (next: RecipeState) => {
+    setRecipe({ scene: null, expression: null, prop: null, extraImages: [], ...next })
+  }
+
   const clearRecipe = () => {
-    setRecipe({ portrait: null, costume: null, pose: null, extraImages: [] })
+    setRecipe({ portrait: null, costume: null, pose: null, scene: null, expression: null, prop: null, extraImages: [] })
     toast.success('已清空配方')
   }
 
@@ -477,6 +574,10 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     setApiConfig((prev) => ({ ...prev, comfyuiParams: { ...prev.comfyuiParams, ...patch } }))
   }
 
+  const updateVideoParams = (patch: Partial<VideoWorkflowParams>) => {
+    setApiConfig((prev) => ({ ...prev, videoParams: { ...prev.videoParams, ...patch } }))
+  }
+
   const addHistory = (item: Omit<GenerationHistoryItem, 'id' | 'createdAt'>) => {
     setHistory((prev) => [
       { ...item, id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, createdAt: Date.now() },
@@ -517,7 +618,9 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       ? 'ComfyUI 工作流'
       : pCfg.model === 'custom' ? pCfg.customModel || 'custom' : pCfg.model
     const finalPrompt =
-      overridePrompt ?? customPrompt ?? buildRecipePrompt(recipeSnapshot, configSnapshot.stylePreset)
+      overridePrompt ??
+      customPrompt ??
+      buildRecipePrompt(recipeSnapshot, configSnapshot.stylePreset, promptOptionsFor(configSnapshot))
 
     isGeneratingRef.current = true
     setIsGenerating(true)
@@ -533,21 +636,14 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         onProgress: setGenerationProgress,
       })
       setPreviewUrl(imageUrl)
-      const extraCount = (recipeSnapshot.extraImages || []).length
-      const summary = [
-        recipeSnapshot.portrait?.发型名称,
-        recipeSnapshot.costume?.source === 'upload' ? recipeSnapshot.costume.服装名称 : recipeSnapshot.costume?.分类,
-        recipeSnapshot.pose ? `${recipeSnapshot.pose.姿势名称}${recipeSnapshot.pose.角度 ? `(${recipeSnapshot.pose.角度})` : ''}` : null,
-        extraCount ? `+${extraCount}附图` : null,
-      ]
-        .filter(Boolean)
-        .join(' + ')
       addHistory({
         provider: providerUsed,
         model: modelUsed,
         prompt: finalPrompt,
         imageUrl,
-        recipeSummary: summary || '自定义合成',
+        recipeSummary: recipeSummaryText(recipeSnapshot) || '自定义合成',
+        recipe: recipeBackup(recipeSnapshot),
+        kind: 'image',
       })
       toast.success(`角色图生成完成 (${modelUsed})`)
     } catch (e) {
@@ -560,6 +656,78 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       setGenerationProgress(null)
     }
   }
+
+  // 批量生成：按顺序逐个调用当前接口（ComfyUI 本地队列 / 云端接口都只能串行，避免显存溢出与限流）
+  const [batch, setBatch] = useState<BatchState | null>(null)
+  const batchCancelRef = useRef(false)
+
+  const runBatch = async (title: string, jobs: BatchJob[]): Promise<BatchResult[]> => {
+    if (isGeneratingRef.current) {
+      toast.error('当前有生成任务在进行，请稍后再试')
+      return []
+    }
+    const configSnapshot = apiConfig
+    const results: BatchResult[] = []
+    const errors: string[] = []
+    batchCancelRef.current = false
+    isGeneratingRef.current = true
+    setIsGenerating(true)
+    setGenerationError('')
+    setBatch({ title, total: jobs.length, done: 0, current: jobs[0]?.label || '', results: [], errors: [], running: true })
+    try {
+      for (let i = 0; i < jobs.length; i++) {
+        if (batchCancelRef.current) break
+        const job = jobs[i]
+        setGeneratingModel(`${title} ${i + 1}/${jobs.length}`)
+        setBatch((b) => (b ? { ...b, current: job.label } : b))
+        const prompt =
+          job.prompt ?? buildRecipePrompt(job.recipe, configSnapshot.stylePreset, promptOptionsFor(configSnapshot))
+        try {
+          const { imageUrl, modelUsed, providerUsed } = await generateCharacterImage({
+            recipe: job.recipe,
+            prompt,
+            config: configSnapshot,
+            onProgress: setGenerationProgress,
+          })
+          const r = { label: job.label, imageUrl, recipe: job.recipe, prompt }
+          results.push(r)
+          setPreviewUrl(imageUrl)
+          addHistory({
+            provider: providerUsed,
+            model: modelUsed,
+            prompt,
+            imageUrl,
+            recipeSummary: `[${title}] ${job.label}`,
+            recipe: recipeBackup(job.recipe),
+            kind: 'batch',
+          })
+        } catch (e) {
+          const msg = `${job.label}：${e instanceof Error ? e.message.split('\n')[0] : '调用失败'}`
+          errors.push(msg)
+          toast.error(msg)
+        }
+        setBatch((b) => (b ? { ...b, done: i + 1, results: [...results], errors: [...errors] } : b))
+      }
+    } finally {
+      isGeneratingRef.current = false
+      setIsGenerating(false)
+      setGenerationProgress(null)
+      setBatch((b) => (b ? { ...b, running: false, current: '' } : b))
+    }
+    toast.success(
+      batchCancelRef.current
+        ? `已停止批量任务（完成 ${results.length}/${jobs.length}）`
+        : `批量任务完成：成功 ${results.length} 张${errors.length ? `，失败 ${errors.length} 张` : ''}`
+    )
+    return results
+  }
+
+  const cancelBatch = () => {
+    batchCancelRef.current = true
+    toast.message('将在当前这张生成完成后停止')
+  }
+
+  const clearBatch = () => setBatch(null)
 
   return (
     <StudioContext.Provider
@@ -598,6 +766,13 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         updateQwenParams,
         updateDoubaoParams,
         updateComfyUiParams,
+        updateVideoParams,
+        setSlotAsset,
+        replaceRecipe,
+        batch,
+        runBatch,
+        cancelBatch,
+        clearBatch,
         addHistory,
         removeHistoryItem,
         clearHistory,

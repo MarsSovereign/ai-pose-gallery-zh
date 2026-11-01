@@ -10,12 +10,18 @@ import {
   FlameIcon,
   PlusIcon,
   RotateCcwIcon,
+  ScanSearchIcon,
   SearchIcon,
+  StarIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { portraitsQuery } from '@/api/gallery'
 import { EmptyState } from '@/components/common/EmptyState'
+import { FavoriteButton, SmartSearchBar } from '@/components/gallery/SmartSearchBar'
+import { type AiResult, applyAiOrder } from '@/lib/aiResult'
+import { searchSimilarTo } from '@/lib/clipSearch'
+import { toggleFavorite, useFavorites } from '@/lib/favorites'
 import { PageHeader } from '@/components/common/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -46,6 +52,9 @@ function PortraitsPage() {
   const [query, setQuery] = useState('')
   const [shown, setShown] = useState(60)
   const [viewerIndex, setViewerIndex] = useState<number | null>(null)
+  const [aiResult, setAiResult] = useState<AiResult | null>(null)
+  const [onlyFav, setOnlyFav] = useState(false)
+  const favs = useFavorites('portrait')
 
   const styleOptions = useMemo(() => {
     const sub = portraits.filter((p) => (!section || p.分区 === section) && (!hair || p.发长 === hair))
@@ -55,15 +64,17 @@ function PortraitsPage() {
   const q = query.trim().toLowerCase()
 
   const filtered = useMemo(() => {
-    return portraits.filter((item) => {
+    const list = portraits.filter((item) => {
       if (section && item.分区 !== section) return false
       if (hair && item.发长 !== hair) return false
       if (styleName !== 'all' && item.发型名称 !== styleName) return false
       if (onlyHot && !item.热门) return false
       if (q && !item.检索.toLowerCase().includes(q)) return false
+      if (onlyFav && !favs.has(item.id)) return false
       return true
     })
-  }, [portraits, section, hair, styleName, onlyHot, q])
+    return applyAiOrder(list, aiResult)
+  }, [portraits, section, hair, styleName, onlyHot, q, onlyFav, favs, aiResult])
 
   const currentItem = viewerIndex !== null ? filtered[viewerIndex] : null
 
@@ -207,12 +218,30 @@ function PortraitsPage() {
             setStyleName('all')
             setOnlyHot(false)
             setQuery('')
+            setAiResult(null)
+            setOnlyFav(false)
             setShown(60)
           }}
         >
           <RotateCcwIcon className="size-3.5" />
           重置
         </Button>
+        <div className="col-span-full">
+          <SmartSearchBar
+            lib="portrait"
+            aiResult={aiResult}
+            onAiResult={(r) => {
+              setAiResult(r)
+              setShown(60)
+            }}
+            onlyFavorites={onlyFav}
+            onOnlyFavoritesChange={(v) => {
+              setOnlyFav(v)
+              setShown(60)
+            }}
+            favoriteCount={favs.size}
+          />
+        </div>
       </div>
 
       {filtered.length === 0 ? (
@@ -263,6 +292,11 @@ function PortraitsPage() {
                     {picked ? <CheckIcon className="size-3" /> : <PlusIcon className="size-3" />}
                     {picked ? '已选' : '加入配方'}
                   </button>
+                  <FavoriteButton
+                    active={favs.has(item.id)}
+                    onToggle={() => toggleFavorite('portrait', item.id)}
+                    className="absolute right-2 bottom-2"
+                  />
                 </div>
 
                 <div className="px-1.5 pt-2.5 pb-1">
@@ -360,6 +394,28 @@ function PortraitsPage() {
                       {picked ? '已在角色配方中（点击移除）' : '加入角色配方'}
                     </Button>
                     <div className="grid grid-cols-2 gap-2">
+                      <Button variant="outline" size="sm" onClick={() => toggleFavorite('portrait', currentItem.id)}>
+                        <StarIcon className={cn('size-3.5', favs.has(currentItem.id) && 'fill-amber-400 text-amber-500')} />
+                        {favs.has(currentItem.id) ? '已收藏' : '收藏'}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={async () => {
+                          try {
+                            const res = await searchSimilarTo(currentItem.id, 'portrait')
+                            setAiResult({ label: `相似：${currentItem.发型名称.slice(0, 16)}`, ids: res.map((x) => x.id) })
+                            setShown(60)
+                            setViewerIndex(null)
+                            window.scrollTo({ top: 0, behavior: 'smooth' })
+                          } catch (e) {
+                            toast.error(e instanceof Error ? e.message : '找相似失败')
+                          }
+                        }}
+                      >
+                        <ScanSearchIcon className="size-3.5" />
+                        找相似
+                      </Button>
                       <Button variant="outline" size="sm" asChild>
                         <a href={`/${currentItem.原图}`} download={`${currentItem.id}.webp`}>
                           <DownloadIcon className="size-3.5" />
