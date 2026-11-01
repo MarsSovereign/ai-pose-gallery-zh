@@ -189,6 +189,7 @@ function mergeStoredConfig(raw: unknown): ApiConfig {
 }
 
 /** 当前配置下应使用的提示词选项（语言、自定义画风、骨架预设） */
+// oxlint-disable-next-line react/only-export-components
 export function promptOptionsFor(config: ApiConfig): PromptOptions {
   return {
     lang: config.promptLang,
@@ -197,6 +198,7 @@ export function promptOptionsFor(config: ApiConfig): PromptOptions {
   }
 }
 
+// oxlint-disable-next-line react/only-export-components
 export function recipeSummaryText(recipe: RecipeState): string {
   const extraCount = (recipe.extraImages || []).length
   return [

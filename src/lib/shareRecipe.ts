@@ -29,9 +29,18 @@ function b64urlDecode(code: string): string {
 export function encodeRecipe(recipe: RecipeState, stylePreset?: string): { code: string; skipped: string[] } {
   const data: SharedRecipe = {}
   const skipped: string[] = []
-  if (recipe.portrait) recipe.portrait.source === 'upload' ? skipped.push('人像') : (data.r = recipe.portrait.id)
-  if (recipe.costume) recipe.costume.source === 'upload' ? skipped.push('服装') : (data.c = recipe.costume.id)
-  if (recipe.pose) recipe.pose.source === 'upload' ? skipped.push('姿势') : (data.p = recipe.pose.id)
+  if (recipe.portrait) {
+    if (recipe.portrait.source === 'upload') skipped.push('人像')
+    else data.r = recipe.portrait.id
+  }
+  if (recipe.costume) {
+    if (recipe.costume.source === 'upload') skipped.push('服装')
+    else data.c = recipe.costume.id
+  }
+  if (recipe.pose) {
+    if (recipe.pose.source === 'upload') skipped.push('姿势')
+    else data.p = recipe.pose.id
+  }
   if (recipe.scene) skipped.push('场景')
   if (recipe.expression) skipped.push('表情')
   if (recipe.prop) skipped.push('道具')

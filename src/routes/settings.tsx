@@ -13,6 +13,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { Field, Section } from '@/components/common/FormSection'
 import { PageHeader } from '@/components/common/PageHeader'
+import { CustomStylesEditor } from '@/components/studio/CustomStylesEditor'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -258,6 +259,8 @@ function SettingsPage() {
           </Field>
         </Section>
       )}
+
+      <CustomStylesEditor />
 
       <div className="flex justify-end">
         <Button size="sm" onClick={() => toast.success('配置已保存')}>
